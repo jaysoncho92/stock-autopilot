@@ -1,0 +1,9 @@
+# 定时任务/手动运行生成的报告与日志（数据产物，不纳入版本控制）
+reports/
+brief.md
+drill.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
