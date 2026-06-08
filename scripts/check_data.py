@@ -9,7 +9,17 @@ from __future__ import annotations
 
 import argparse
 
-from market_data import index_block, A_INDICES, HK_INDICES, US_INDICES
+from market_data import (index_block, stock_quote, stock_history,
+                         A_INDICES, HK_INDICES, US_INDICES)
+
+# 个股自检样本（每个市场几只代表性标的）。rt_only=True 表示仅校验实时（历史为已知缺口）
+SAMPLE_STOCKS = {
+    "A股": ("a", [("600519", "贵州茅台", False), ("000858", "五粮液", False),
+                  ("300750", "宁德时代", False), ("832000", "安徽凤凰(北交所)", True)]),
+    "港股": ("hk", [("00700", "腾讯控股", False), ("09988", "阿里巴巴-W", False),
+                  ("03690", "美团-W", False)]),
+    "美股": ("us", [("AAPL", "苹果", False), ("TSLA", "特斯拉", False), ("NVDA", "英伟达", False)]),
+}
 
 
 def _fmt_hist(hist: list[dict]) -> str:
@@ -38,16 +48,44 @@ def check_market(label: str, indices: list[dict], days: int) -> bool:
     return ok
 
 
+def check_stocks(days: int) -> dict[str, bool]:
+    print(f"\n{'#'*72}\n个股行情自检（实时 + 近 {days} 日历史）\n{'#'*72}")
+    results = {}
+    for label, (market, stocks) in SAMPLE_STOCKS.items():
+        print(f"\n【{label} 个股】")
+        ok = True
+        for code, name, rt_only in stocks:
+            q = stock_quote(code, market)
+            try:
+                hist = stock_history(code, market, days)
+            except Exception as e:  # noqa: BLE001
+                hist = []
+                print(f"        history_error {code}: {repr(e)[:60]}")
+            n = len(hist)
+            good = bool(q) and (rt_only or n > 0)
+            ok = ok and good
+            price = f"{q.get('price')}({q.get('change_pct', 0):+.2f}%)" if q else "N/A"
+            note = "  ←仅实时(历史为已知缺口)" if rt_only else ""
+            print(f"  [{'OK ' if good else 'FAIL'}] {name:<14}{code:<8} 实时 {price:<20} 历史{n}天{note}")
+        results[label] = ok
+    return results
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=5)
+    ap.add_argument("--stocks", action="store_true", help="只测个股")
     args = ap.parse_args()
 
-    results = {
-        "美股": check_market("美股 US", US_INDICES, args.days),
-        "港股": check_market("港股 HK", HK_INDICES, args.days),
-        "A股": check_market("A股 A-Share", A_INDICES, args.days),
-    }
+    results: dict[str, bool] = {}
+    if not args.stocks:
+        results["美股指数"] = check_market("美股 US 指数", US_INDICES, args.days)
+        results["港股指数"] = check_market("港股 HK 指数", HK_INDICES, args.days)
+        results["A股指数"] = check_market("A股 指数", A_INDICES, args.days)
+
+    stock_res = check_stocks(args.days)
+    results.update({f"{k}个股": v for k, v in stock_res.items()})
+
     print(f"\n{'='*72}\n汇总\n{'='*72}")
     for k, v in results.items():
         print(f"  {k}: {'✅ 正常' if v else '❌ 异常'}")

@@ -176,6 +176,49 @@ def fetch_history(hist: tuple[str, str] | None, days: int) -> list[dict]:
     return []
 
 
+# ───────────────────────── 个股行情（A股 / 港股 / 美股） ─────────────────────────
+def _a_prefix(code: str) -> str:
+    """A 股 6 位代码 → 腾讯前缀代码。6/9→sh，8/4→bj，其余→sz。"""
+    code = code.strip().upper().replace("SH", "").replace("SZ", "").replace("BJ", "")
+    code = code.split(".")[0]
+    if code.startswith(("6", "9")):
+        return f"sh{code}"
+    if code.startswith(("8", "4")):
+        return f"bj{code}"
+    return f"sz{code}"
+
+
+def _tq_code(code: str, market: str) -> str:
+    """个股代码 → 腾讯实时代码。"""
+    if market == "a":
+        return _a_prefix(code)
+    if market == "hk":
+        return f"r_hk{code.zfill(5)}"
+    return f"us{code.upper()}"  # 美股
+
+
+def stock_quote(code: str, market: str) -> dict:
+    """单只个股实时行情。market: 'a'/'hk'/'us'。
+
+    返回 {code, name, price, prev_close, change_pct, amount}（取不到返回 {}）。
+    """
+    tq = _tq_code(code, market)
+    snap = tencent_quotes([tq])
+    rec = snap.get(tq.split("_", 1)[-1]) or snap.get(tq) or {}
+    if rec:
+        rec = {"code": code, **rec}
+    return rec
+
+
+def stock_history(code: str, market: str, days: int = 5) -> list[dict]:
+    """单只个股近 days 日日K [{date, close, change_pct}]。"""
+    if market == "a":
+        return tencent_daily(_a_prefix(code), "a", days)
+    if market == "hk":
+        return tencent_daily(f"hk{code.zfill(5)}", "hk", days)
+    return yahoo_daily(code.upper(), days)  # 美股
+
+
 # ───────────────────────── 东财板块排名 ─────────────────────────
 def eastmoney_boards(board_type: int = 2, top: int = 10) -> dict:
     """东财板块涨跌排名。board_type: 2=行业, 3=概念。
@@ -300,13 +343,23 @@ def northbound() -> dict:
     r = requests.get(url, headers={"User-Agent": UA, "Host": "data.hexin.cn",
                                    "Referer": "https://data.hexin.cn/"}, timeout=TIMEOUT)
     d = r.json()
-    hgt = [x for x in (d.get("hgt") or []) if x not in (None, "")]
-    sgt = [x for x in (d.get("sgt") or []) if x not in (None, "")]
-    h = float(hgt[-1]) if hgt else None
-    s = float(sgt[-1]) if sgt else None
-    return {"hgt_yi": h, "sgt_yi": s,
-            "total_yi": round((h or 0) + (s or 0), 2) if (h is not None or s is not None) else None,
-            "points": len(d.get("time") or [])}
+    n_time = len(d.get("time") or [])
+
+    def _leg(key: str) -> float | None:
+        """仅当该条腿的分钟序列基本完整时才采用末值，避免上游断供/串档的脏数据。"""
+        arr = [x for x in (d.get(key) or []) if x not in (None, "")]
+        # 序列长度需达到时间轴的 80%（沪深股通净额量级通常在 ±200 亿内）
+        if not arr or (n_time and len(arr) < 0.8 * n_time):
+            return None
+        try:
+            return float(arr[-1])
+        except (TypeError, ValueError):
+            return None
+
+    h = _leg("hgt")
+    s = _leg("sgt")
+    total = round((h or 0) + (s or 0), 2) if (h is not None and s is not None) else None
+    return {"hgt_yi": h, "sgt_yi": s, "total_yi": total, "points": n_time}
 
 
 # ───────────────────────── 指数 N 日趋势聚合 ─────────────────────────
