@@ -2,37 +2,40 @@
 
 ## Cursor Cloud specific instructions
 
-### 仓库现状
+### 服务概览
 
-`stock-autopilot` 目前是一个**空脚手架仓库**：除 `README.md`（仅含标题）外，没有应用源码、依赖清单、Docker/CI 配置或启动脚本。
+单进程 **FastAPI** 应用，内置 **APScheduler** 定时任务，无需额外数据库或 Redis。
 
-### 服务与运行
+| 服务 | 端口 | 启动命令 |
+|------|------|----------|
+| API + 调度器 | 8000 | `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
 
-| 服务 | 状态 |
-|------|------|
-| 应用 / API / 前端 | 未定义，无法启动 |
-| 数据库 / 缓存 / 队列 | 未定义 |
+开发模式加 `--reload`。服务启动后调度器自动运行；也可 `POST /jobs/run` 手动触发。
 
-在添加 `package.json`、`pyproject.toml`、`docker-compose.yml` 等之前，**无法**执行 lint、测试或 dev server。
+### 依赖安装
 
-### VM 已具备的工具
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-云 VM 已预装常用开发工具，例如：
+### 环境变量
 
-- Node.js（nvm，`pnpm` / `npm` 可用）
-- Python 3.12（`pip` 可用）
+复制 `.env.example` 为 `.env`。`SLACK_WEBHOOK_URL` 未配置时任务仍会拉取行情并生成报告，但不会推送 Slack。
 
-具体版本以当前 VM 为准：`node --version`、`python3 --version`。
+### 测试与 lint
 
-### 有代码后的典型流程（待项目定义）
+```bash
+source .venv/bin/activate
+pytest -q
+```
 
-README 或贡献指南出现依赖说明后，按项目约定执行，例如：
+项目未配置 ruff/mypy；以 pytest 为准。
 
-- Node：`pnpm install` → `pnpm dev` / `pnpm lint` / `pnpm test`
-- Python：`pip install -r requirements.txt` 或 `uv sync` → 按 README 启动
+### 注意事项
 
-**不要**在 update 脚本中加入 `docker compose up`、`pnpm dev` 等服务启动命令；服务应在每次会话中按需手动启动。
-
-### 分支与远程
-
-默认分支为 `main`，远程：`https://github.com/jaysoncho92/stock-autopilot`。
+- 行情拉取依赖外网（yfinance、AKShare）；Cloud VM 需能访问相关数据源。
+- A 股名称查询会调用 `ak.stock_zh_a_spot_em()`，首次较慢。
+- Cron 表达式使用 **UTC** 时区。
+- **不要**在 VM update 脚本中启动 uvicorn；每次会话按需手动启动。
