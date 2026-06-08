@@ -26,6 +26,22 @@ import requests
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 TIMEOUT = 15
 
+_SESSION = requests.Session()
+_SESSION.headers.update({"User-Agent": UA})
+
+
+def _get(url: str, *, params: dict | None = None, headers: dict | None = None,
+         retries: int = 3, **kw) -> requests.Response:
+    """带重试的 GET：东财 / 同花顺等接口偶发连接重置(RemoteDisconnected)，自动退避重试。"""
+    last = None
+    for i in range(retries):
+        try:
+            return _SESSION.get(url, params=params, headers=headers, timeout=TIMEOUT, **kw)
+        except requests.RequestException as e:  # noqa: PERF203
+            last = e
+            time.sleep(0.6 * (i + 1))
+    raise last  # type: ignore[misc]
+
 # ───────────────────────── 指数清单 ─────────────────────────
 # tq   = 腾讯实时代码（实时快照，所有市场可用）
 # hist = (源, 代码) 历史日K：
@@ -62,7 +78,7 @@ def tencent_quotes(codes: list[str]) -> dict[str, dict]:
     if not codes:
         return {}
     url = "https://qt.gtimg.cn/q=" + ",".join(codes)
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r = _get(url)
     r.encoding = "gbk"
     out: dict[str, dict] = {}
     for line in r.text.strip().split(";"):
@@ -100,8 +116,7 @@ def yahoo_daily(symbol: str, days: int = 5) -> list[dict]:
     # 多取一些缓冲，避免节假日导致不足
     rng = "1mo" if days <= 20 else "3mo"
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
-    r = requests.get(url, params={"interval": "1d", "range": rng},
-                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r = _get(url, params={"interval": "1d", "range": rng})
     r.raise_for_status()
     res = r.json()["chart"]["result"][0]
     ts = res.get("timestamp", [])
@@ -134,8 +149,7 @@ def tencent_daily(code: str, market: str, days: int = 5) -> list[dict]:
     """
     endpoint = "hkfqkline" if market == "hk" else "fqkline"
     url = f"https://web.ifzq.gtimg.cn/appstock/app/{endpoint}/get"
-    r = requests.get(url, params={"param": f"{code},day,,,{days + 10},qfq"},
-                     headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r = _get(url, params={"param": f"{code},day,,,{days + 10},qfq"})
     node = (r.json().get("data") or {}).get(code) or {}
     klines = node.get("qfqday") or node.get("day") or []
     rows = [{"date": k[0], "close": round(float(k[2]), 2)} for k in klines if len(k) >= 3]
@@ -148,9 +162,7 @@ def eastmoney_daily(secid: str, days: int = 5) -> list[dict]:
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     params = {"secid": secid, "fields1": "f1", "fields2": "f51,f53",
               "klt": "101", "fqt": "1", "end": "20500101", "lmt": str(days + 10)}
-    r = requests.get(url, params=params,
-                     headers={"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"},
-                     timeout=TIMEOUT)
+    r = _get(url, params=params, headers={"Referer": "https://quote.eastmoney.com/"})
     klines = (r.json().get("data") or {}).get("klines") or []
     rows = []
     for line in klines:
@@ -231,7 +243,7 @@ def eastmoney_boards(board_type: int = 2, top: int = 10) -> dict:
         "fid": "f3", "fs": f"m:90+t:{board_type}",
         "fields": "f3,f12,f14,f104,f105,f128,f140",
     }
-    r = requests.get(url, params=params, headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r = _get(url, params=params)
     diff = (r.json().get("data") or {}).get("diff") or []
     rows = [{
         "name": it.get("f14", ""),
@@ -255,9 +267,7 @@ def _zt_dt_pool(kind: str, date: str) -> list[dict]:
         "Pageindex": "0", "pagesize": "600",
         "sort": "fbt:asc" if kind == "zt" else "fund:asc", "date": date,
     }
-    r = requests.get(url, params=params,
-                     headers={"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"},
-                     timeout=TIMEOUT)
+    r = _get(url, params=params, headers={"Referer": "https://quote.eastmoney.com/"})
     pool = (r.json().get("data") or {}).get("pool") or []
     out = []
     for it in pool:
@@ -315,7 +325,7 @@ def ths_theme_tags(date: str | None = None, top: int = 15) -> dict:
         date = datetime.now().strftime("%Y-%m-%d")
     url = (f"http://zx.10jqka.com.cn/event/api/getharden/"
            f"date/{date}/orderby/date/orderway/desc/charset/GBK/")
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
+    r = _get(url)
     d = r.json()
     rows = d.get("data") or []
     from collections import Counter
@@ -340,8 +350,7 @@ def northbound() -> dict:
     沪深港通额度调整后部分时段可能返回 0，属上游问题。
     """
     url = "https://data.hexin.cn/market/hsgtApi/method/dayChart/"
-    r = requests.get(url, headers={"User-Agent": UA, "Host": "data.hexin.cn",
-                                   "Referer": "https://data.hexin.cn/"}, timeout=TIMEOUT)
+    r = _get(url, headers={"Host": "data.hexin.cn", "Referer": "https://data.hexin.cn/"})
     d = r.json()
     n_time = len(d.get("time") or [])
 
