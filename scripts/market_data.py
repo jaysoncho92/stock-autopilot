@@ -52,7 +52,6 @@ A_INDICES = [
     {"name": "创业板指", "tq": "sz399006", "hist": ("tx_a", "sz399006")},
     {"name": "科创50", "tq": "sh000688", "hist": ("tx_a", "sh000688")},
     {"name": "沪深300", "tq": "sh000300", "hist": ("tx_a", "sh000300")},
-    {"name": "北证50", "tq": "bj899050", "hist": ("em", "0.899050")},
 ]
 HK_INDICES = [
     {"name": "恒生指数", "tq": "r_hkHSI", "hist": ("tx_hk", "hkHSI")},
@@ -156,22 +155,6 @@ def tencent_daily(code: str, market: str, days: int = 5) -> list[dict]:
     return _attach_change(rows, days)
 
 
-# ───────────────────────── 东财 N 日日K ─────────────────────────
-def eastmoney_daily(secid: str, days: int = 5) -> list[dict]:
-    """东财 push2his 日K。secid 形如 '0.899050'（北证50）。"""
-    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-    params = {"secid": secid, "fields1": "f1", "fields2": "f51,f53",
-              "klt": "101", "fqt": "1", "end": "20500101", "lmt": str(days + 10)}
-    r = _get(url, params=params, headers={"Referer": "https://quote.eastmoney.com/"})
-    klines = (r.json().get("data") or {}).get("klines") or []
-    rows = []
-    for line in klines:
-        parts = line.split(",")
-        if len(parts) >= 2:
-            rows.append({"date": parts[0], "close": round(float(parts[1]), 2)})
-    return _attach_change(rows, days)
-
-
 def fetch_history(hist: tuple[str, str] | None, days: int) -> list[dict]:
     """按指数的 hist 配置取历史日K。"""
     if not hist:
@@ -181,8 +164,6 @@ def fetch_history(hist: tuple[str, str] | None, days: int) -> list[dict]:
         return tencent_daily(code, "a", days)
     if src == "tx_hk":
         return tencent_daily(code, "hk", days)
-    if src == "em":
-        return eastmoney_daily(code, days)
     if src == "yh":
         return yahoo_daily(code, days)
     return []
