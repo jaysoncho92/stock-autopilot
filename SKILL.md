@@ -29,8 +29,14 @@ version: 1.0
 
 ```bash
 pip install requests          # 唯一硬依赖
-python scripts/daily_briefing.py --days 5            # 今天，回看5个交易日
+python scripts/daily_briefing.py --days 5            # 今天，回看5个交易日，生成《数据简报》
 python scripts/daily_briefing.py --days 5 --date 20260608 --out brief.md
+
+# 主线 → 个股下钻（定位成分龙头 + 实时/近N日/主力资金流）
+python scripts/stock_drilldown.py --theme 机器人,具身智能,人形机器人 --top 8
+
+# 定时任务运行器（交易日自动取数 + 自动识别主线 + 下钻，输出 reports/主线报告_YYYYMMDD.md）
+python scripts/run_daily.py            # 仅交易日执行；--force 可强制
 ```
 
 数据源（全部公开、零鉴权，参考 [a-stock-data](https://github.com/simonlin1212/a-stock-data) 与 [global-stock-data](https://github.com/simonlin1212/global-stock-data)）：
@@ -44,7 +50,15 @@ python scripts/daily_briefing.py --days 5 --date 20260608 --out brief.md
 | 当日强势股题材归因 | 同花顺 `getharden` | reason 标签词频 = 主线候选 |
 | 北向资金 | 同花顺 `hsgtApi` | 沪/深股通净额（含脏数据剔除） |
 
-> 若需个股级深挖（研报 / 龙虎榜 / 资金流 / 财报 / 估值），直接调用 a-stock-data、global-stock-data 两个工具包的对应函数。
+> 若需更深个股维度（研报 / 龙虎榜 / 财报 / 估值），直接调用 a-stock-data、global-stock-data 两个工具包的对应函数。
+
+### 个股下钻
+
+确定主线后，用 `scripts/stock_drilldown.py --theme <题材>` 把主线下钻到**成分龙头个股**，输出每只个股的：现价、当日涨幅、近 N 日累计涨幅、**近 N 日主力净流入（亿元）**、题材归因。研判要点：
+
+- **资金共振**：涨幅居前 **且** 主力净流入为正 → 强度高、可重点跟踪。
+- **谨防分歧**：涨幅高 **但** 主力净流出 → 散户拉抬、主力撤退，警惕高位。
+- 龙头梯队结合涨停池「连板高度」判断该主线的情绪天花板。
 
 ## 分析方法论
 
@@ -85,6 +99,20 @@ python scripts/daily_briefing.py --days 5 --date 20260608 --out brief.md
 ### 5. 港股主线
 
 港股看 **恒指(权重) / 恒生科技(成长) / 国企指数** 三条线 + 与中概(PGJ)的联动；主线常与 A 股共振（如 AI、创新药、互联网平台），也有独立逻辑（南向资金、港股特有标的）。
+
+## 定时任务（每个交易日中午自动执行）
+
+`scripts/run_daily.py` 会判断当日是否交易日（以上证当日是否生成日K为准，**自动跳过周末与节假日**），交易日则采集数据、自动识别主线题材并下钻，输出 `reports/主线报告_YYYYMMDD.md`。
+
+```bash
+# 安装定时任务（周一至周五 12:00，本机时区；节假日由运行器自动跳过）
+bash scripts/install_cron.sh
+# 服务器为 UTC 时区时，北京 12:00 对应 UTC 04:00：
+HOUR=4 bash scripts/install_cron.sh
+bash scripts/install_cron.sh --remove   # 卸载
+```
+
+> 选中午 12:00：A 股上午收盘后、午间休市，主线与情绪已基本明朗；港股处于午间，可同步评估。
 
 ## 报告模板
 

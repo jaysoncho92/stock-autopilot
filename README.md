@@ -11,6 +11,9 @@ A股 / 港股「当日主线行情」分析技能（AI Skill）。结合过去�
 | `SKILL.md` | 技能主体：何时激活、数据源、**分析方法论**、报告模板、操作意见框架、免责声明 |
 | `scripts/market_data.py` | 自包含数据采集模块（指数 / 个股 / 板块 / 涨停池 / 题材 / 北向），仅依赖 `requests` |
 | `scripts/daily_briefing.py` | 把采集数据整理成《多市场行情数据简报》(Markdown) |
+| `scripts/stock_drilldown.py` | 主线题材 → 个股下钻（成分龙头 + 实时/近N日/主力资金流） |
+| `scripts/run_daily.py` | 定时任务运行器（交易日自动取数+识别主线+下钻，输出 `reports/`） |
+| `scripts/install_cron.sh` | 安装/卸载定时任务（每个交易日 12:00） |
 | `scripts/check_data.py` | 数据获取自检（指数 + 个股，A/港/美 三市场） |
 
 数据获取方案参考：
@@ -35,9 +38,17 @@ python scripts/check_data.py --stocks            # 只测个股
 # 生成当日多市场数据简报（分析报告的数据底稿）
 python scripts/daily_briefing.py --days 5
 python scripts/daily_briefing.py --days 5 --date 20260608 --out brief.md
+
+# 主线 → 个股下钻
+python scripts/stock_drilldown.py --theme 机器人,具身智能 --top 8
+
+# 定时任务：每个交易日 12:00 自动执行（节假日自动跳过）
+bash scripts/install_cron.sh            # 本机时区 12:00
+HOUR=4 bash scripts/install_cron.sh     # 服务器为 UTC 时设为 4（=北京12点）
+python scripts/run_daily.py --force     # 手动跑一次
 ```
 
-拿到《数据简报》后，AI 按 `SKILL.md` 的方法论研判主线、套用报告模板，产出最终分析报告与操作意见。
+拿到《数据简报》/《主线报告》后，AI 按 `SKILL.md` 的方法论研判主线、套用报告模板，产出最终分析报告与操作意见。
 
 ## 数据源（全部公开、零鉴权）
 

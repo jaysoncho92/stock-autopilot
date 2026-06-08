@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -38,6 +38,20 @@ def _get(url: str, *, params: dict | None = None, headers: dict | None = None,
         try:
             return _SESSION.get(url, params=params, headers=headers, timeout=TIMEOUT, **kw)
         except requests.RequestException as e:  # noqa: PERF203
+            last = e
+            time.sleep(0.6 * (i + 1))
+    raise last  # type: ignore[misc]
+
+
+def _get_json(url: str, *, params: dict | None = None, headers: dict | None = None,
+              retries: int = 3, **kw) -> dict:
+    """带重试的 GET + JSON 解析：东财偶发返回空 200 体导致 JSONDecodeError，一并重试。"""
+    last: Exception | None = None
+    for i in range(retries):
+        try:
+            r = _SESSION.get(url, params=params, headers=headers, timeout=TIMEOUT, **kw)
+            return r.json()
+        except (requests.RequestException, ValueError) as e:  # ValueError 含 JSONDecodeError
             last = e
             time.sleep(0.6 * (i + 1))
     raise last  # type: ignore[misc]
@@ -115,16 +129,15 @@ def yahoo_daily(symbol: str, days: int = 5) -> list[dict]:
     # 多取一些缓冲，避免节假日导致不足
     rng = "1mo" if days <= 20 else "3mo"
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
-    r = _get(url, params={"interval": "1d", "range": rng})
-    r.raise_for_status()
-    res = r.json()["chart"]["result"][0]
+    d = _get_json(url, params={"interval": "1d", "range": rng})
+    res = d["chart"]["result"][0]
     ts = res.get("timestamp", [])
     closes = res["indicators"]["quote"][0].get("close", [])
     rows = []
     for t, c in zip(ts, closes):
         if c is None:
             continue
-        rows.append({"date": datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"),
+        rows.append({"date": datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d"),
                      "close": round(c, 2)})
     return _attach_change(rows, days)
 
@@ -148,8 +161,8 @@ def tencent_daily(code: str, market: str, days: int = 5) -> list[dict]:
     """
     endpoint = "hkfqkline" if market == "hk" else "fqkline"
     url = f"https://web.ifzq.gtimg.cn/appstock/app/{endpoint}/get"
-    r = _get(url, params={"param": f"{code},day,,,{days + 10},qfq"})
-    node = (r.json().get("data") or {}).get(code) or {}
+    d = _get_json(url, params={"param": f"{code},day,,,{days + 10},qfq"})
+    node = (d.get("data") or {}).get(code) or {}
     klines = node.get("qfqday") or node.get("day") or []
     rows = [{"date": k[0], "close": round(float(k[2]), 2)} for k in klines if len(k) >= 3]
     return _attach_change(rows, days)
@@ -224,8 +237,8 @@ def eastmoney_boards(board_type: int = 2, top: int = 10) -> dict:
         "fid": "f3", "fs": f"m:90+t:{board_type}",
         "fields": "f3,f12,f14,f104,f105,f128,f140",
     }
-    r = _get(url, params=params)
-    diff = (r.json().get("data") or {}).get("diff") or []
+    d = _get_json(url, params=params)
+    diff = (d.get("data") or {}).get("diff") or []
     rows = [{
         "name": it.get("f14", ""),
         "change_pct": it.get("f3", 0),
@@ -248,8 +261,8 @@ def _zt_dt_pool(kind: str, date: str) -> list[dict]:
         "Pageindex": "0", "pagesize": "600",
         "sort": "fbt:asc" if kind == "zt" else "fund:asc", "date": date,
     }
-    r = _get(url, params=params, headers={"Referer": "https://quote.eastmoney.com/"})
-    pool = (r.json().get("data") or {}).get("pool") or []
+    d = _get_json(url, params=params, headers={"Referer": "https://quote.eastmoney.com/"})
+    pool = (d.get("data") or {}).get("pool") or []
     out = []
     for it in pool:
         out.append({
@@ -297,30 +310,81 @@ def limit_pool(date: str) -> dict:
 
 
 # ───────────────────────── 同花顺题材归因 ─────────────────────────
+def _ths_harden(date: str | None = None) -> tuple[str, list[dict]]:
+    """拉取同花顺当日强势股原始列表（归一化字段）。返回 (date, rows)。"""
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    url = (f"http://zx.10jqka.com.cn/event/api/getharden/"
+           f"date/{date}/orderby/date/orderway/desc/charset/GBK/")
+    d = _get_json(url)
+    rows = []
+    for r in (d.get("data") or []):
+        rows.append({
+            "code": r.get("code", ""),
+            "name": r.get("name", ""),
+            "reason": str(r.get("reason") or ""),  # 题材归因
+        })
+    return date, rows
+
+
+def _is_sh_sz_a(code: str) -> bool:
+    """是否沪深 A 股（主板/创业板/科创板）。排除北交所(8/4/920)、B股(9xx)等。"""
+    return len(code) == 6 and code.startswith(("6", "0", "3"))
+
+
 def ths_theme_tags(date: str | None = None, top: int = 15) -> dict:
     """同花顺当日强势股题材归因，统计 reason 标签词频 → 主线候选。
 
     date: YYYY-MM-DD，None=今天。返回 {count, tags: [(tag, n)...], samples: [...]}。
     """
-    if date is None:
-        date = datetime.now().strftime("%Y-%m-%d")
-    url = (f"http://zx.10jqka.com.cn/event/api/getharden/"
-           f"date/{date}/orderby/date/orderway/desc/charset/GBK/")
-    r = _get(url)
-    d = r.json()
-    rows = d.get("data") or []
+    date, rows = _ths_harden(date)
     from collections import Counter
     cnt: Counter = Counter()
     for row in rows:
-        reason = str(row.get("reason") or "")
-        for tag in re.split(r"[+＋、,，\s]+", reason):
+        for tag in re.split(r"[+＋、,，\s]+", row["reason"]):
             tag = tag.strip()
             if tag:
                 cnt[tag] += 1
-    samples = [{"name": r.get("name"), "zhangfu": r.get("zhangfu"),
-                "reason": r.get("reason")} for r in rows[:10]]
+    samples = [{"name": r["name"], "reason": r["reason"]} for r in rows[:10]]
     return {"date": date, "count": len(rows),
             "tags": cnt.most_common(top), "samples": samples}
+
+
+def theme_stocks(keyword: str, date: str | None = None) -> list[dict]:
+    """按题材关键词从当日强势股中定位成分龙头（reason 含关键词），仅沪深 A 股。
+
+    keyword: 题材关键词，如 '机器人' / '具身智能' / 'AI'。
+    返回 [{code, name, reason}]（涨幅/排序由调用方结合实时行情决定）。
+    """
+    _, rows = _ths_harden(date)
+    return [r for r in rows if keyword in r["reason"] and _is_sh_sz_a(r["code"])]
+
+
+# ───────────────────────── 个股资金流（日级） ─────────────────────────
+def stock_fundflow(code: str, days: int = 5) -> dict:
+    """个股日级主力资金流（东财 push2his，单位元）。
+
+    返回 {daily: [{date, main_net, super_net, main_pct}], main_sum_yi（近days日主力累计净流入,亿元）}。
+    仅支持沪深 A 股个股。
+    """
+    secid = f"1.{code}" if code.startswith(("6", "9")) else f"0.{code}"
+    url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+    params = {"secid": secid, "fields1": "f1,f2,f3,f7",
+              "fields2": "f51,f52,f53,f54,f55,f56,f57", "lmt": str(days + 5)}
+    d = _get_json(url, params=params, headers={"Referer": "https://quote.eastmoney.com/"})
+    klines = (d.get("data") or {}).get("klines") or []
+    daily = []
+    for line in klines[-days:]:
+        p = line.split(",")
+        if len(p) >= 6:
+            daily.append({
+                "date": p[0],
+                "main_net": float(p[1]) if p[1] not in ("-", "") else 0.0,
+                "super_net": float(p[5]) if p[5] not in ("-", "") else 0.0,
+                "main_pct": float(p[6]) if len(p) > 6 and p[6] not in ("-", "") else 0.0,
+            })
+    main_sum = sum(d["main_net"] for d in daily)
+    return {"daily": daily, "main_sum_yi": round(main_sum / 1e8, 2)}
 
 
 # ───────────────────────── 北向资金 ─────────────────────────
@@ -331,8 +395,7 @@ def northbound() -> dict:
     沪深港通额度调整后部分时段可能返回 0，属上游问题。
     """
     url = "https://data.hexin.cn/market/hsgtApi/method/dayChart/"
-    r = _get(url, headers={"Host": "data.hexin.cn", "Referer": "https://data.hexin.cn/"})
-    d = r.json()
+    d = _get_json(url, headers={"Host": "data.hexin.cn", "Referer": "https://data.hexin.cn/"})
     n_time = len(d.get("time") or [])
 
     def _leg(key: str) -> float | None:
@@ -369,6 +432,24 @@ def index_block(indices: list[dict], days: int = 5) -> list[dict]:
                 rec["history_error"] = repr(e)[:80]
         out.append(rec)
     return out
+
+
+def beijing_today() -> str:
+    """北京时间(UTC+8)当天日期 YYYY-MM-DD。"""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
+def is_trading_day(date: str | None = None) -> bool:
+    """是否 A 股交易日：以上证指数当日是否已生成日K为准（自动避开周末/节假日）。
+
+    date: YYYY-MM-DD，默认北京时间今天。盘中（含午间）今日K线已存在即视为交易日。
+    """
+    target = date or beijing_today()
+    try:
+        hist = tencent_daily("sh000001", "a", 1)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(hist) and hist[-1]["date"] == target
 
 
 def collect(days: int = 5, date: str | None = None) -> dict:
