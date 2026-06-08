@@ -42,13 +42,30 @@ python scripts/daily_briefing.py --days 5 --date 20260608 --out brief.md
 # 主线 → 个股下钻
 python scripts/stock_drilldown.py --theme 机器人,具身智能 --top 8
 
-# 定时任务：每个交易日 12:00 自动执行（节假日自动跳过）
+# 定时任务（方式一：本机 cron）：每个交易日 12:00 自动执行（节假日自动跳过）
 bash scripts/install_cron.sh            # 本机时区 12:00
 HOUR=4 bash scripts/install_cron.sh     # 服务器为 UTC 时设为 4（=北京12点）
 python scripts/run_daily.py --force     # 手动跑一次
 ```
 
 拿到《数据简报》/《主线报告》后，AI 按 `SKILL.md` 的方法论研判主线、套用报告模板，产出最终分析报告与操作意见。
+
+## 定时任务（方式二：Cursor Automations）
+
+[Cursor Automations](https://cursor.com/docs/cloud-agent/automations) 本质是「定时拉起一个 Cloud Agent，按 prompt 干活」，运行在会读取本仓库 `.cursor/environment.json` 的 Cloud VM 上。本仓库已内置 `.cursor/environment.json`（自动 `pip install -r requirements.txt`）与 `AGENTS.md`（含云端运行说明 + 可直接粘贴的 prompt）。
+
+配置步骤：
+
+1. 打开 [cursor.com/automations](https://cursor.com/automations) 新建 Automation。
+2. **Trigger** 选 Scheduled，填 cron：
+   - 界面可选时区 → 选 `Asia/Shanghai`，cron `0 12 * * 1-5`（周一至周五12:00）。
+   - 按 UTC → 填 `0 4 * * 1-5`（= 北京12:00，工作日不错位）。
+3. **Repository** 选本仓库 + 目标分支。
+4. **Prompt** 粘贴 `AGENTS.md` 里「用于 Automation 的 Prompt」。
+5. **Tools** 启用 `Open pull request`（产出报告开 PR）；如需推送可启用 `Send to Slack`。
+6. 创建后手动触发一次，确认时区与脚本正常。
+
+> 说明：① cron 只能做到「工作日」，中国法定节假日由 `run_daily.py` 的交易日判断自动跳过；② Automation 以 Cloud Agent（Max Mode）运行，按用量计费；若只想确定性跑脚本，本机 cron / GitHub Actions 更轻量。
 
 ## 数据源（全部公开、零鉴权）
 
